@@ -1,29 +1,5 @@
 let map;
-let busMarker;
-let userMarker;
-let currentDirection = "balmain";
-
-const route445 = {
-  balmain: [
-    [-33.9117, 151.1034], // Campsie
-    [-33.9025, 151.1260],
-    [-33.8945, 151.1385],
-    [-33.8848, 151.1571], // Leichhardt-ish
-    [-33.8688, 151.1707],
-    [-33.8587, 151.1794]  // Balmain-ish
-  ],
-
-  campsie: [
-    [-33.8587, 151.1794],
-    [-33.8688, 151.1707],
-    [-33.8848, 151.1571],
-    [-33.8945, 151.1385],
-    [-33.9025, 151.1260],
-    [-33.9117, 151.1034]
-  ]
-};
-
-let busIndex = 0;
+let busMarkers = {};
 
 function startApp() {
   map = L.map("map").setView([-33.8848, 151.1571], 13);
@@ -33,101 +9,60 @@ function startApp() {
     attribution: "© OpenStreetMap"
   }).addTo(map);
 
-  drawRoute("balmain");
-  createBus();
+  document.getElementById("status").textContent = "Loading real 445 buses...";
+  loadReal445Buses();
 
-  document.getElementById("status").textContent = "Route 445 demo is running";
-  document.getElementById("nextBus").textContent = "Next bus: demo bus moving now";
-
-  setInterval(moveBus, 2000);
+  setInterval(loadReal445Buses, 15000);
 }
 
-function drawRoute(direction) {
-  currentDirection = direction;
-  busIndex = 0;
+async function loadReal445Buses() {
+  try {
+    const response = await fetch("/api/vehiclepos");
+    const data = await response.json();
 
-  map.eachLayer(layer => {
-    if (layer instanceof L.Polyline && !(layer instanceof L.TileLayer)) {
-      map.removeLayer(layer);
-    }
-  });
+    document.getElementById("status").textContent =
+      `Real route 445 buses found: ${data.count}`;
 
-  const route = route445[direction];
+    document.getElementById("nextBus").textContent =
+      "Live data refreshes every 15 seconds";
 
-  L.polyline(route, {
-    weight: 6,
-    opacity: 0.8
-  }).addTo(map);
+    data.buses.forEach(bus => {
+      const position = [bus.lat, bus.lng];
 
-  map.fitBounds(route);
+      if (busMarkers[bus.id]) {
+        busMarkers[bus.id].setLatLng(position);
+      } else {
+        const busIcon = L.divIcon({
+          html: "🚌",
+          className: "bus-icon",
+          iconSize: [30, 30]
+        });
 
-  if (busMarker) {
-    busMarker.setLatLng(route[0]);
+        busMarkers[bus.id] = L.marker(position, {
+          icon: busIcon
+        }).addTo(map);
+
+        busMarkers[bus.id].bindPopup(`Route 445<br>Trip: ${bus.tripId}`);
+      }
+    });
+  } catch (error) {
+    document.getElementById("status").textContent =
+      "Could not load real bus data";
+    console.error(error);
   }
-
-  const directionText = direction === "balmain" ? "To Balmain" : "To Campsie";
-  document.getElementById("status").textContent = `Showing 445 ${directionText}`;
-}
-
-function createBus() {
-  const busIcon = L.divIcon({
-    html: "🚌",
-    className: "bus-icon",
-    iconSize: [30, 30]
-  });
-
-  busMarker = L.marker(route445[currentDirection][0], {
-    icon: busIcon
-  }).addTo(map);
-
-  busMarker.bindPopup("Route 445 demo bus");
-}
-
-function moveBus() {
-  const route = route445[currentDirection];
-
-  busIndex++;
-
-  if (busIndex >= route.length) {
-    busIndex = 0;
-  }
-
-  const nextPosition = route[busIndex];
-
-  busMarker.setLatLng(nextPosition);
-
-  const minutes = Math.floor(Math.random() * 8) + 2;
-  document.getElementById("nextBus").textContent = `Next bus: approx ${minutes} mins`;
 }
 
 function showDirection(direction) {
-  drawRoute(direction);
+  alert("Direction filtering can be added next.");
 }
 
 function findMe() {
-  if (!navigator.geolocation) {
-    alert("Location is not supported on this device.");
-    return;
-  }
-
-  navigator.geolocation.getCurrentPosition(
-    position => {
-      const lat = position.coords.latitude;
-      const lng = position.coords.longitude;
-
-      if (userMarker) {
-        userMarker.setLatLng([lat, lng]);
-      } else {
-        userMarker = L.marker([lat, lng]).addTo(map);
-        userMarker.bindPopup("You are here");
-      }
-
-      map.setView([lat, lng], 15);
-    },
-    () => {
-      alert("Could not get your location.");
-    }
-  );
+  navigator.geolocation.getCurrentPosition(position => {
+    const lat = position.coords.latitude;
+    const lng = position.coords.longitude;
+    L.marker([lat, lng]).addTo(map).bindPopup("You are here");
+    map.setView([lat, lng], 15);
+  });
 }
 
 startApp();
