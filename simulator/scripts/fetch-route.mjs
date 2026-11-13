@@ -19,10 +19,29 @@ node(r.r);out tags;`;
 const args = process.argv.slice(2);
 let raw;
 if (args[0] === '--input') raw = JSON.parse(readFileSync(args[1], 'utf8'));
-else {
-  const res = await fetch('https://overpass-api.de/api/interpreter', { method: 'POST', body: new URLSearchParams({ data: QUERY }) });
-  if (!res.ok) throw new Error(`Overpass ${res.status}`);
-  raw = await res.json();
+else raw = await fetchOverpass();
+
+async function fetchOverpass() {
+  // Overpass rejects anonymous clients (HTTP 406), so identify the app.
+  const servers = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+  for (const url of servers) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'User-Agent': 'sydney-bus-simulator/0.1 (route data fetch)',
+          'Accept': 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({ data: QUERY }).toString(),
+      });
+      if (res.ok) return await res.json();
+      console.warn(`${url} answered ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    } catch (e) {
+      console.warn(`${url} failed: ${e.message}`);
+    }
+  }
+  throw new Error('All Overpass servers failed. Wait a minute and try again.');
 }
 
 const rels = raw.elements.filter((e) => e.type === 'relation');
