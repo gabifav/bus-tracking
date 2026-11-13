@@ -24,21 +24,29 @@ else raw = await fetchOverpass();
 async function fetchOverpass() {
   // Overpass rejects anonymous clients (HTTP 406), so identify the app.
   const servers = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   for (const url of servers) {
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'User-Agent': 'sydney-bus-simulator/0.1 (route data fetch)',
-          'Accept': 'application/json',
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: new URLSearchParams({ data: QUERY }).toString(),
-      });
-      if (res.ok) return await res.json();
-      console.warn(`${url} answered ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    } catch (e) {
-      console.warn(`${url} failed: ${e.message}`);
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'User-Agent': 'sydney-bus-simulator/0.1 (route data fetch)',
+            'Accept': 'application/json',
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams({ data: QUERY }).toString(),
+        });
+        if (res.ok) return await res.json();
+        console.warn(`${url} answered ${res.status}: ${(await res.text()).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').slice(0, 160)}`);
+        if (![429, 502, 503, 504].includes(res.status)) break; // not worth retrying
+        const retryAfter = Number(res.headers.get('retry-after'));
+        const wait = (retryAfter > 0 ? retryAfter : 5 * 2 ** (attempt - 1)) * 1000;
+        if (attempt < 5) { console.log(`Retrying in ${wait / 1000}s (attempt ${attempt + 1}/5)...`); await sleep(wait); }
+      } catch (e) {
+        console.warn(`${url} failed: ${e.message}`);
+        if (attempt < 5) await sleep(5000 * 2 ** (attempt - 1));
+      }
     }
   }
   throw new Error('All Overpass servers failed. Wait a minute and try again.');
