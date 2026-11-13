@@ -1,11 +1,15 @@
 import * as THREE from 'three';
 import type { Collider } from '../vehicles/Bus';
-import { RoutePath } from './RoutePath';
+import { RoutePath, type PathPoint } from './RoutePath';
+import { StreetIndex, type Street } from './StreetIndex';
+import { buildRealBuildings, type BuildingRecord } from './Buildings';
 
 export interface RouteData {
   name: string; from?: string; to?: string; attribution: string;
   path: number[][];                       // [x, z, roadWidth]
   stops: { name: string; x: number; z: number }[];
+  buildings?: BuildingRecord[];   // real OSM footprints
+  streets?: Street[];             // real side streets near the route
 }
 export interface Stop { name: string; s: number; x: number; z: number }
 
@@ -21,6 +25,8 @@ export class RouteWorld implements Collider {
   readonly group = new THREE.Group();
   readonly path: RoutePath;
   readonly stops: Stop[];
+  readonly streets: StreetIndex;
+  private occupied = new Set<string>(); // 2 m cells covered by real buildings
 
   constructor(readonly data: RouteData) {
     this.path = new RoutePath(data.path);
@@ -29,10 +35,18 @@ export class RouteWorld implements Collider {
       .filter((st) => this.path.nearest(st.x, st.z).dist < 30)
       .sort((a, b) => a.s - b.s);
 
-    this.group.add(this.ribbon(FOOTPATH, 0.0, 0xa9a59c)); // footpath band (under the road)
-    this.group.add(this.ribbon(0, 0.03, 0x37373a));       // asphalt
+    this.streets = new StreetIndex(data.streets ?? []);
+    const sideLines: PathPoint[][] = (data.streets ?? []).map((st) => {
+      const pts: PathPoint[] = [];
+      for (let i = 0; i + 1 < st.p.length; i += 2) pts.push({ x: st.p[i], z: st.p[i + 1], width: st.w, junction: 0 });
+      return pts;
+    });
+    this.group.add(this.ribbon([this.path.pts, ...sideLines], FOOTPATH - 1, 0.0, 0xa9a59c)); // footpaths
+    this.group.add(this.ribbon(sideLines, 0, 0.025, 0x3d3d40));                                // side streets
+    this.group.add(this.ribbon([this.path.pts], 0, 0.03, 0x37373a));                           // route asphalt
     this.buildGround();
     this.buildMarkingsAndKerbs();
+    this.buildRealBuildings();
     this.buildBuildings();
     this.buildStreetFurniture();
     this.buildStops();
@@ -40,7 +54,7 @@ export class RouteWorld implements Collider {
 
   isBlocked(x: number, z: number): boolean {
     const n = this.path.nearest(x, z);
-    return n.dist > n.width / 2 - 0.2 && !this.path.inJunction(x, z, -0.2);
+    return n.dist > n.width / 2 - 0.2 && !this.path.inJunction(x, z, -0.2) && !this.streets.contains(x, z, -0.2);
   }
 
   nearestRoadPoint(x: number, z: number): { x: number; z: number } {
@@ -55,11 +69,10 @@ export class RouteWorld implements Collider {
 
   // ---------------------------------------------------------------- road
   /** Flat band following the path: quads per segment plus discs at joints. */
-  private ribbon(extra: number, y: number, colour: number): THREE.Mesh {
+  private ribbon(lines: PathPoint[][], extra: number, y: number, colour: number): THREE.Mesh {
     const pos: number[] = [];
-    const pts = this.path.pts;
     const tri = (ax: number, az: number, bx: number, bz: number, cx: number, cz: number) => pos.push(ax, y, az, bx, y, bz, cx, y, cz);
-    for (let i = 0; i < pts.length; i++) {
+    for (const pts of lines) for (let i = 0; i < pts.length; i++) {
       const a = pts[i], hw = a.width / 2 + extra, jr = Math.max(a.width / 2, a.junction) + extra;
       if (i < pts.length - 1) {
         const b = pts[i + 1], len = Math.hypot(b.x - a.x, b.z - a.z) || 1;
@@ -109,7 +122,7 @@ export class RouteWorld implements Collider {
   /** Keeps an object only if it sits at least `clear` metres from every part of the road. */
   private clearOfRoad(x: number, z: number, clear: number): boolean {
     const n = this.path.nearest(x, z);
-    return n.dist > n.width / 2 + clear && !this.path.inJunction(x, z, clear);
+    return n.dist > n.width / 2 + clear && !this.path.inJunction(x, z, clear) && !this.streets.contains(x, z, clear);
   }
 
   private buildMarkingsAndKerbs(): void {
@@ -128,8 +141,8 @@ export class RouteWorld implements Collider {
         const ex = p.x + lx * side * (hw - 0.6), ez = p.z + lz * side * (hw - 0.6);
         const kx = p.x + lx * side * (hw + 0.1), kz = p.z + lz * side * (hw + 0.1);
         // Kerb/edge pieces are dropped where they'd poke into the road at bends
-        if (this.path.nearest(kx, kz).dist > hw - 0.05 && !this.path.inJunction(kx, kz, -0.05)) place(kerbs, kx, 0.08, kz, yaw);
-        if (this.path.nearest(ex, ez).dist > hw - 0.7 && bend < 0.15 && !this.path.inJunction(ex, ez, 0.5)) place(edges, ex, 0.045, ez, yaw);
+        if (this.path.nearest(kx, kz).dist > hw - 0.05 && !this.path.inJunction(kx, kz, -0.05) && !this.streets.contains(kx, kz, 0.3)) place(kerbs, kx, 0.08, kz, yaw);
+        if (this.path.nearest(ex, ez).dist > hw - 0.7 && bend < 0.15 && !this.path.inJunction(ex, ez, 0.5) && !this.streets.contains(ex, ez, 0.5)) place(edges, ex, 0.045, ez, yaw);
       }
     });
     const inst = (geo: THREE.BufferGeometry, mat: THREE.Material, list: THREE.Matrix4[]) => {
@@ -145,6 +158,23 @@ export class RouteWorld implements Collider {
   }
 
   // ---------------------------------------------------------------- buildings
+  /** Real OSM footprints. Any that would sit on our (approximate-width) roads are dropped. */
+  private buildRealBuildings(): void {
+    const { group, footprints } = buildRealBuildings(this.data.buildings ?? [], (ring) =>
+      ring.some(([x, z]) => !this.clearOfRoad(x, z, 0.3)));
+    this.group.add(group);
+    for (const ring of footprints) {
+      const xs = ring.map((p) => p[0]), zs = ring.map((p) => p[1]);
+      for (let x = Math.floor(Math.min(...xs) / 2) - 1; x <= Math.floor(Math.max(...xs) / 2) + 1; x++)
+        for (let z = Math.floor(Math.min(...zs) / 2) - 1; z <= Math.floor(Math.max(...zs) / 2) + 1; z++) this.occupied.add(`${x},${z}`);
+    }
+  }
+
+  private isOccupied(x: number, z: number): boolean {
+    return this.occupied.has(`${Math.floor(x / 2)},${Math.floor(z / 2)}`);
+  }
+
+  /** Procedural houses and shops, only where no real building exists. */
   private buildBuildings(): void {
     type Lot = { x: number; z: number; yaw: number; w: number; d: number; h: number; colour: number };
     const houses: Lot[] = [], shops: Lot[] = [], roofs: Lot[] = [], awnings: Lot[] = [];
@@ -168,8 +198,10 @@ export class RouteWorld implements Collider {
         const x = p.x + lx * off, z = p.z + lz * off;
         const r = Math.min(w, d) / 2;
         // Footprint corners must stay off the road/footpath
-        const ok = [[0, 0], [-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]].every(([a, b]) =>
-          this.clearOfRoad(x + p.dirX * a * w + lx * b * d, z + p.dirZ * a * w + lz * b * d, FOOTPATH - 0.3));
+        const ok = [[0, 0], [-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5], [0, -0.5], [0, 0.5]].every(([a, b]) => {
+          const qx = x + p.dirX * a * w + lx * b * d, qz = z + p.dirZ * a * w + lz * b * d;
+          return this.clearOfRoad(qx, qz, FOOTPATH - 0.3) && !this.isOccupied(qx, qz);
+        });
         if (ok && free(x, z, r) && rnd() > 0.06) {
           taken.push({ x, z, r });
           const yaw = Math.atan2(p.dirX, p.dirZ);

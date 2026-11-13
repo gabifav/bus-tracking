@@ -22,6 +22,10 @@ To refresh it from OpenStreetMap (needs internet):
 node scripts/fetch-route.mjs
 ```
 
+It also includes the real building footprints (with heights/levels where
+mapped) and side streets within ~100 m of the route. Gaps where OpenStreetMap
+has no buildings are filled with generated houses and shops.
+
 Sharp corners get an intersection area so the 12 m bus can swing through them,
 and the bus scrapes along kerbs rather than stopping dead.
 
@@ -50,6 +54,8 @@ src/
   vehicles/Bus.ts       arcade bicycle-model physics, tunables in BUS_SPEC
   world/RoutePath.ts    route centre-line with fast nearest-point queries
   world/RouteWorld.ts   streetscape built along the route; road collision
+  world/Buildings.ts    extrudes real OSM footprints (walls, gable/flat roofs)
+  world/StreetIndex.ts  side-street segments for drawing and collision
   audio/BusAudio.ts     procedural diesel engine and air-brake sounds
   data/route445.json    route path and stops (from scripts/fetch-route.mjs)
   camera/ChaseCamera.ts smoothed follow camera with modes
