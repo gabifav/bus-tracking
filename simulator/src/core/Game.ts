@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { Input } from './Input';
 import { Bus } from '../vehicles/Bus';
-import { RoadNetwork } from '../world/RoadNetwork';
-import { City } from '../world/City';
+import { RouteWorld, type RouteData } from '../world/RouteWorld';
+import routeData from '../data/route445.json';
 import { ChaseCamera } from '../camera/ChaseCamera';
 import { Hud } from '../ui/Hud';
 import { BusAudio } from '../audio/BusAudio';
@@ -17,8 +17,7 @@ export class Game {
   private audio = new BusAudio();
   private cam: ChaseCamera;
   private sun: THREE.DirectionalLight;
-  readonly roads = new RoadNetwork();
-  readonly city = new City(this.roads);
+  readonly world = new RouteWorld(routeData as RouteData);
   readonly bus = new Bus();
 
   constructor(container: HTMLElement) {
@@ -30,7 +29,7 @@ export class Game {
     container.appendChild(this.renderer.domElement);
 
     this.scene.background = new THREE.Color(0x87b5e0);
-    this.scene.fog = new THREE.Fog(0x87b5e0, 150, 600);
+    this.scene.fog = new THREE.Fog(0xa9c4dd, 120, 520);
 
     this.scene.add(new THREE.HemisphereLight(0xdfefff, 0x4a5a3a, 1.1));
     this.sun = new THREE.DirectionalLight(0xfff2dd, 2);
@@ -40,13 +39,12 @@ export class Game {
     sc.left = sc.bottom = -60; sc.right = sc.top = 60; sc.near = 1; sc.far = 300;
     this.scene.add(this.sun, this.sun.target);
 
-    this.scene.add(this.city.group, this.bus.object);
+    this.scene.add(this.world.group, this.bus.object);
 
-    // Spawn mid-block on the centre-ish north–south road, in the left lane, facing +Z
-    const x = this.roads.roadsX[Math.floor(this.roads.roadsX.length / 2)];
-    const z = (this.roads.roadsZ[2] + this.roads.roadsZ[3]) / 2;
-    this.bus.setSpawn(x + this.roads.roadWidth / 4, z - 20, 0);
+    const sp = this.world.spawn;
+    this.bus.setSpawn(sp.x, sp.z, sp.heading);
 
+    this.hud.setRoute(routeData.name, routeData.attribution);
     this.cam = new ChaseCamera(window.innerWidth / window.innerHeight);
     this.cam.update(0, this.bus.position, this.bus.heading, true);
 
@@ -60,6 +58,14 @@ export class Game {
     this.renderer.setAnimationLoop(() => this.tick());
   }
 
+  private nextStopTimer = 0;
+  private updateNextStop(): void {
+    if ((this.nextStopTimer = (this.nextStopTimer + 1) % 10) !== 0) return; // ~6 Hz is plenty
+    const s = this.world.path.nearest(this.bus.position.x, this.bus.position.z).s;
+    const next = this.world.stops.find((st) => st.s > s + 5);
+    this.hud.setNextStop(next ? next.name : 'End of route', next ? next.s - s : 0);
+  }
+
   private tick(): void {
     const dt = Math.min(this.clock.getDelta(), 0.05); // clamp after tab switches
 
@@ -67,7 +73,7 @@ export class Game {
     if (this.input.wasPressed('KeyC')) this.cam.cycleMode();
     if (this.input.wasPressed('KeyM')) this.audio.toggleMute();
 
-    this.bus.update(dt, this.input.getDriveControls(), this.city);
+    this.bus.update(dt, this.input.getDriveControls(), this.world);
     this.cam.update(dt, this.bus.position, this.bus.heading);
 
     // Keep the shadow frustum centred on the bus
@@ -77,6 +83,7 @@ export class Game {
 
     this.hud.update(this.bus.speedKmh, this.bus.reverse, this.bus.gear, this.bus.rpm);
     this.audio.update(this.bus);
+    this.updateNextStop();
     this.input.endFrame();
     this.renderer.render(this.scene, this.cam.camera);
   }

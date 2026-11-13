@@ -12,6 +12,18 @@ npm run dev        # then open the printed URL (http://localhost:5173)
 
 Production build: `npm run build`, then `npm run preview` to serve it.
 
+## Route 445 data
+
+The streets are built from the real route 445 path and stops in OpenStreetMap,
+saved in `src/data/route445.json`. The file in the repo is a **placeholder** until
+you fetch the real one (needs internet, about 1 minute):
+
+```bash
+node scripts/fetch-route.mjs
+```
+
+Map data © OpenStreetMap contributors (ODbL).
+
 ## Controls
 
 | Key | Action |
@@ -22,6 +34,7 @@ Production build: `npm run build`, then `npm run preview` to serve it.
 | Space | Handbrake |
 | R | Reset the bus to the start |
 | C | Cycle camera: chase, far, nose |
+| M | Mute sound |
 
 ## Layout
 
@@ -32,13 +45,15 @@ src/
   core/Input.ts         keyboard state, turned into DriveControls
   vehicles/BusModel.ts  procedural bus mesh and dimensions
   vehicles/Bus.ts       arcade bicycle-model physics, tunables in BUS_SPEC
-  world/RoadNetwork.ts  road grid as pure data (roads, blocks, isOnRoad)
-  world/City.ts         meshes for ground, roads, buildings and parks; collision
+  world/RoutePath.ts    route centre-line with fast nearest-point queries
+  world/RouteWorld.ts   streetscape built along the route; road collision
+  audio/BusAudio.ts     procedural diesel engine and air-brake sounds
+  data/route445.json    route path and stops (from scripts/fetch-route.mjs)
   camera/ChaseCamera.ts smoothed follow camera with modes
   ui/Hud.ts             speedometer overlay
 ```
 
 Extension points for later work:
-- Traffic, routes and bus stops can read lane and block data from `RoadNetwork`.
+- Traffic, timetables and passengers can use `RoutePath` (arc length, nearest point) and the stop list.
 - Physics can be swapped behind `Bus.update`.
 - `Collider` is the interface the bus uses for collision.
