@@ -12,6 +12,8 @@
       #speed { font-size: 48px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
       #unit { font-size: 14px; opacity: .8; }
       #gear { font-size: 14px; margin-top: 4px; }
+      #rpmbar { height: 4px; background: rgba(255,255,255,.2); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+      #rpm { height: 100%; width: 0; background: #ffb000; }
       #help { position: fixed; left: 16px; top: 16px; color: #fff; background: rgba(0,0,0,.5);
               padding: 8px 12px; border-radius: 8px; font-size: 13px; line-height: 1.5; pointer-events: none; }
     </style>
@@ -19,10 +21,10 @@
   <body>
     <div id="help">
       <b>Sydney Bus Simulator</b><br />
-      W / ↑ accelerate · S / ↓ brake &amp; reverse<br />
-      A D / ← → steer · Space handbrake · R reset · C camera
+      W / ↑ accelerate · S / ↓ brake (hold when stopped to reverse)<br />
+      A D / ← → steer · Space handbrake · R reset · C camera · M mute
     </div>
-    <div id="hud"><div id="speed">0</div><div id="unit">km/h</div><div id="gear">D</div></div>
+    <div id="hud"><div id="speed">0</div><div id="unit">km/h</div><div id="gear">N</div><div id="rpmbar"><div id="rpm"></div></div></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

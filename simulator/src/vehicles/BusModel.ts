@@ -5,6 +5,9 @@ export const BUS_DIMENSIONS = { length: 12, width: 2.5, height: 3.1, wheelbase: 
 
 export interface BusModel {
   root: THREE.Group;
+  body: THREE.Group;             // sprung mass: rolls and pitches
+  /** Local Z of the rear axle; the bus pivots about this point. */
+  rearAxleZ: number;
   frontWheels: THREE.Object3D[]; // steer pivots
   allWheels: THREE.Mesh[];       // for spin animation
 }
@@ -16,6 +19,8 @@ export interface BusModel {
 export function createBusModel(): BusModel {
   const { length: L, width: W, height: H, wheelRadius: R } = BUS_DIMENSIONS;
   const root = new THREE.Group();
+  const body = new THREE.Group();
+  root.add(body);
   const mat = (color: number, extra: Partial<THREE.MeshStandardMaterialParameters> = {}) =>
     new THREE.MeshStandardMaterial({ color, roughness: 0.6, ...extra });
 
@@ -24,7 +29,7 @@ export function createBusModel(): BusModel {
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
     mesh.position.set(x, y, z);
     mesh.castShadow = true;
-    root.add(mesh);
+    body.add(mesh);
     return mesh;
   };
 
@@ -86,5 +91,5 @@ export function createBusModel(): BusModel {
     }
   }
 
-  return { root, frontWheels, allWheels };
+  return { root, body, rearAxleZ: rearZ, frontWheels, allWheels };
 }

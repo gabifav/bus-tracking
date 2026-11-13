@@ -5,14 +5,16 @@ import { RoadNetwork } from '../world/RoadNetwork';
 import { City } from '../world/City';
 import { ChaseCamera } from '../camera/ChaseCamera';
 import { Hud } from '../ui/Hud';
+import { BusAudio } from '../audio/BusAudio';
 
 /** Owns the renderer, scene and main loop; wires subsystems together. */
 export class Game {
-  private renderer: THREE.WebGLRenderer;
+  readonly renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private clock = new THREE.Clock();
   private input = new Input();
   private hud = new Hud();
+  private audio = new BusAudio();
   private cam: ChaseCamera;
   private sun: THREE.DirectionalLight;
   readonly roads = new RoadNetwork();
@@ -63,6 +65,7 @@ export class Game {
 
     if (this.input.wasPressed('KeyR')) this.bus.reset();
     if (this.input.wasPressed('KeyC')) this.cam.cycleMode();
+    if (this.input.wasPressed('KeyM')) this.audio.toggleMute();
 
     this.bus.update(dt, this.input.getDriveControls(), this.city);
     this.cam.update(dt, this.bus.position, this.bus.heading);
@@ -72,7 +75,8 @@ export class Game {
     this.sun.position.set(p.x + 40, 80, p.z + 25);
     this.sun.target.position.copy(p);
 
-    this.hud.update(this.bus.speedKmh);
+    this.hud.update(this.bus.speedKmh, this.bus.reverse, this.bus.gear, this.bus.rpm);
+    this.audio.update(this.bus);
     this.input.endFrame();
     this.renderer.render(this.scene, this.cam.camera);
   }
