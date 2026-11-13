@@ -11,21 +11,23 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const QUERY = `[out:json][timeout:240][maxsize:268435456];
+const QUERY = `[out:json][timeout:90];
 rel["route"="bus"]["ref"="445"](-33.96,151.05,-33.84,151.21)->.r;
 .r out geom;
-way(r.r)->.rw;
-.rw out tags;
-node(r.r);out tags;
-way["building"](around.rw:90);out geom;
-way["highway"~"^(trunk|primary|secondary|tertiary|residential|unclassified|living_street|service)$"](around.rw:30);out geom;`;
+way(r.r);out tags;
+node(r.r);out tags;`;
+// Buildings and streets are fetched in small boxes along the route (one big query is too heavy)
+const chunkQuery = (s, w, n, e) => `[out:json][timeout:90];
+(way["building"](${s},${w},${n},${e});
+ way["highway"~"^(trunk|primary|secondary|tertiary|residential|unclassified|living_street|service)$"](${s},${w},${n},${e}););
+out geom;`;
 
 const args = process.argv.slice(2);
 let raw;
 if (args[0] === '--input') raw = JSON.parse(readFileSync(args[1], 'utf8'));
-else raw = await fetchOverpass();
+else raw = await fetchOverpass(QUERY);
 
-async function fetchOverpass() {
+async function fetchOverpass(query) {
   // Overpass rejects anonymous clients (HTTP 406), so identify the app.
   const servers = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -39,9 +41,13 @@ async function fetchOverpass() {
             'Accept': 'application/json',
             'Content-Type': 'application/x-www-form-urlencoded',
           },
-          body: new URLSearchParams({ data: QUERY }).toString(),
+          body: new URLSearchParams({ data: query }).toString(),
         });
-        if (res.ok) return await res.json();
+        if (res.ok) {
+          const json = await res.json();
+          if (json.remark) throw new Error(`server problem: ${json.remark.slice(0, 160)}`);
+          return json;
+        }
         console.warn(`${url} answered ${res.status}: ${(await res.text()).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').slice(0, 160)}`);
         if (![429, 502, 503, 504].includes(res.status)) break; // not worth retrying
         const retryAfter = Number(res.headers.get('retry-after'));
@@ -102,6 +108,26 @@ const stopMembers = rel.members.filter((m) => m.type === 'node' && /platform/.te
 const stops = (stopMembers.length ? stopMembers : rel.members.filter((m) => m.type === 'node' && /stop/.test(m.role)))
   .map((m) => ({ ref: m.ref, xz: proj(m.lat, m.lon) }));
 const nodeNames = new Map(raw.elements.filter((e) => e.type === 'node').map((n) => [n.id, n.tags?.name ?? '']));
+
+// --- Fetch buildings/streets in ~800 m chunks of the route
+if (args[0] !== '--input') {
+  const PAD = 0.0011; // ≈ 110 m
+  const seen = new Set(raw.elements.map((e) => e.type + e.id));
+  let chunkStart = 0, chunks = [];
+  for (let i = 1, acc = 0; i < pts.length; i++) {
+    acc += Math.hypot((pts[i][0] - pts[i - 1][0]) * kz, (pts[i][1] - pts[i - 1][1]) * kx);
+    if (acc > 800 || i === pts.length - 1) { chunks.push(pts.slice(chunkStart, i + 1)); chunkStart = i; acc = 0; }
+  }
+  for (let c = 0; c < chunks.length; c++) {
+    const lats = chunks[c].map((p) => p[0]), lons = chunks[c].map((p) => p[1]);
+    const box = [Math.min(...lats) - PAD, Math.min(...lons) - PAD * 1.2, Math.max(...lats) + PAD, Math.max(...lons) + PAD * 1.2].map((v) => v.toFixed(5));
+    process.stdout.write(`Buildings and streets: chunk ${c + 1}/${chunks.length}...\r`);
+    const part = await fetchOverpass(chunkQuery(...box));
+    for (const e of part.elements) if (!seen.has(e.type + e.id)) { seen.add(e.type + e.id); raw.elements.push(e); }
+    await new Promise((r) => setTimeout(r, 1500)); // be polite to the free server
+  }
+  console.log('');
+}
 
 // --- Spatial index of the route, to keep only nearby buildings/streets
 const CELL = 50, grid = new Map();
