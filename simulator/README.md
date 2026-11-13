@@ -15,12 +15,15 @@ Production build: `npm run build`, then `npm run preview` to serve it.
 ## Route 445 data
 
 The streets are built from the real route 445 path and stops in OpenStreetMap,
-saved in `src/data/route445.json`. The file in the repo is a **placeholder** until
-you fetch the real one (needs internet, about 1 minute):
+saved in `src/data/route445.json` (Campsie Station to Balmain, 14.5 km, 53 stops).
+To refresh it from OpenStreetMap (needs internet):
 
 ```bash
 node scripts/fetch-route.mjs
 ```
+
+Sharp corners get an intersection area so the 12 m bus can swing through them,
+and the bus scrapes along kerbs rather than stopping dead.
 
 Map data © OpenStreetMap contributors (ODbL).
 

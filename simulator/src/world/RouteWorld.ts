@@ -40,7 +40,11 @@ export class RouteWorld implements Collider {
 
   isBlocked(x: number, z: number): boolean {
     const n = this.path.nearest(x, z);
-    return n.dist > n.width / 2 - 0.2;
+    return n.dist > n.width / 2 - 0.2 && !this.path.inJunction(x, z, -0.2);
+  }
+
+  nearestRoadPoint(x: number, z: number): { x: number; z: number } {
+    return this.path.at(this.path.nearest(x, z).s);
   }
 
   /** Start of the route, in the left lane, facing along the route. */
@@ -56,17 +60,17 @@ export class RouteWorld implements Collider {
     const pts = this.path.pts;
     const tri = (ax: number, az: number, bx: number, bz: number, cx: number, cz: number) => pos.push(ax, y, az, bx, y, bz, cx, y, cz);
     for (let i = 0; i < pts.length; i++) {
-      const a = pts[i], hw = a.width / 2 + extra;
+      const a = pts[i], hw = a.width / 2 + extra, jr = Math.max(a.width / 2, a.junction) + extra;
       if (i < pts.length - 1) {
         const b = pts[i + 1], len = Math.hypot(b.x - a.x, b.z - a.z) || 1;
         const nx = ((b.z - a.z) / len) * hw, nz = (-(b.x - a.x) / len) * hw;
         tri(a.x + nx, a.z + nz, b.x + nx, b.z + nz, a.x - nx, a.z - nz);
         tri(b.x + nx, b.z + nz, b.x - nx, b.z - nz, a.x - nx, a.z - nz);
       }
-      const N = 10; // joint disc
+      const N = a.junction ? 24 : 10; // joint disc
       for (let k = 0; k < N; k++) {
         const t0 = (k / N) * Math.PI * 2, t1 = ((k + 1) / N) * Math.PI * 2;
-        tri(a.x, a.z, a.x + Math.cos(t1) * hw, a.z + Math.sin(t1) * hw, a.x + Math.cos(t0) * hw, a.z + Math.sin(t0) * hw);
+        tri(a.x, a.z, a.x + Math.cos(t1) * jr, a.z + Math.sin(t1) * jr, a.x + Math.cos(t0) * jr, a.z + Math.sin(t0) * jr);
       }
     }
     const geo = new THREE.BufferGeometry();
@@ -87,9 +91,9 @@ export class RouteWorld implements Collider {
     const xs = this.path.pts.map((p) => p.x), zs = this.path.pts.map((p) => p.z);
     const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cz = (Math.min(...zs) + Math.max(...zs)) / 2;
     const size = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...zs) - Math.min(...zs)) + 1000;
-    const g = new THREE.Mesh(new THREE.PlaneGeometry(size, size).rotateX(-Math.PI / 2),
+    const g = new THREE.Mesh(new THREE.PlaneGeometry(size, size, 64, 64).rotateX(-Math.PI / 2),
       new THREE.MeshStandardMaterial({ color: 0x6d7f55, roughness: 1 }));
-    g.position.set(cx, -0.05, cz);
+    g.position.set(cx, -0.3, cz); // well below the footpath to avoid depth fighting at grazing angles
     g.receiveShadow = true;
     this.group.add(g);
   }
@@ -105,7 +109,7 @@ export class RouteWorld implements Collider {
   /** Keeps an object only if it sits at least `clear` metres from every part of the road. */
   private clearOfRoad(x: number, z: number, clear: number): boolean {
     const n = this.path.nearest(x, z);
-    return n.dist > n.width / 2 + clear;
+    return n.dist > n.width / 2 + clear && !this.path.inJunction(x, z, clear);
   }
 
   private buildMarkingsAndKerbs(): void {
@@ -119,13 +123,13 @@ export class RouteWorld implements Collider {
       // Dashed centre line: 3 m on, 7 m off. Skip where the road bends hard.
       const ahead = this.path.at(s + 6);
       const bend = Math.abs(p.dirX * ahead.dirZ - p.dirZ * ahead.dirX);
-      if (s % 10 < 2 && bend < 0.15) place(dashes, p.x, 0.045, p.z, yaw);
+      if (s % 10 < 2 && bend < 0.15 && !this.path.inJunction(p.x, p.z, 2)) place(dashes, p.x, 0.045, p.z, yaw);
       for (const side of [1, -1]) {
         const ex = p.x + lx * side * (hw - 0.6), ez = p.z + lz * side * (hw - 0.6);
         const kx = p.x + lx * side * (hw + 0.1), kz = p.z + lz * side * (hw + 0.1);
         // Kerb/edge pieces are dropped where they'd poke into the road at bends
-        if (this.path.nearest(kx, kz).dist > hw - 0.05) place(kerbs, kx, 0.08, kz, yaw);
-        if (this.path.nearest(ex, ez).dist > hw - 0.7 && bend < 0.15) place(edges, ex, 0.045, ez, yaw);
+        if (this.path.nearest(kx, kz).dist > hw - 0.05 && !this.path.inJunction(kx, kz, -0.05)) place(kerbs, kx, 0.08, kz, yaw);
+        if (this.path.nearest(ex, ez).dist > hw - 0.7 && bend < 0.15 && !this.path.inJunction(ex, ez, 0.5)) place(edges, ex, 0.045, ez, yaw);
       }
     });
     const inst = (geo: THREE.BufferGeometry, mat: THREE.Material, list: THREE.Matrix4[]) => {
@@ -205,9 +209,9 @@ export class RouteWorld implements Collider {
   ): void {
     const im = new THREE.InstancedMesh(geo, mat, lots.length);
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), c = new THREE.Color(), up = new THREE.Vector3(0, 1, 0);
-    // Local x = along the street (width), local z = depth from the street
+    // After rotating by yaw: local z runs along the street (width), local x away from it (depth)
     lots.forEach((l, i) => {
-      m.compose(new THREE.Vector3(l.x, baseY(l), l.z), q.setFromAxisAngle(up, l.yaw + Math.PI / 2), new THREE.Vector3(l.d, height(l), l.w));
+      m.compose(new THREE.Vector3(l.x, baseY(l), l.z), q.setFromAxisAngle(up, l.yaw), new THREE.Vector3(l.d, height(l), l.w));
       im.setMatrixAt(i, m);
       im.setColorAt(i, c.setHex(l.colour));
     });

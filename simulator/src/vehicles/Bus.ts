@@ -5,6 +5,8 @@ import { BUS_DIMENSIONS, createBusModel, type BusModel } from './BusModel';
 /** Something the bus can collide with. Implemented by the world. */
 export interface Collider {
   isBlocked(x: number, z: number): boolean;
+  /** Closest drivable point (used to slide the bus along kerbs). */
+  nearestRoadPoint(x: number, z: number): { x: number; z: number };
 }
 
 /** Tunables for a ~12 t rigid diesel city bus. Kept together so other bus types can load their own. */
@@ -54,6 +56,8 @@ export class Bus {
   rpm = BUS_SPEC.idleRpm;
   longAccel = 0;
   latAccel = 0;
+  /** > 0 while scraping a kerb (for audio/feedback) */
+  scraping = 0;
 
   reverse = false;
   private reverseHold = 0;
@@ -155,13 +159,8 @@ export class Bus {
     this.rear.y += Math.cos(this.heading) * this.speed * dt;
     this.updateCentre();
 
-    if (this.collides(world)) {
-      this.rear.copy(prevRear);
-      this.heading = prevH;
-      this.updateCentre();
-      this.speed *= -0.1;
-      this.pitchVel += 0.4 * Math.sign(this.longAccel || 1); // jolt
-    }
+    if (this.collides(world)) this.resolveCollision(world, prevRear, prevH);
+    this.scraping = Math.max(0, this.scraping - dt);
 
     // --- Suspension (visual spring-damper)
     const k = 45, damp = 2 * Math.sqrt(k) * 0.35;
@@ -179,16 +178,61 @@ export class Bus {
     this.position.set(this.rear.x + Math.sin(this.heading) * off, 0, this.rear.y + Math.cos(this.heading) * off);
   }
 
-  /** Samples points around the footprint against the world. */
+  /**
+   * Slide along kerbs: push the bus away from the blocked side and bleed off
+   * speed according to how head-on the impact is. Falls back to undoing the move.
+   */
+  private resolveCollision(world: Collider, prevRear: THREE.Vector2, prevH: number): void {
+    const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
+    for (let iter = 0; iter < 4; iter++) {
+      const hits = this.blockedPoints(world);
+      if (!hits.length) break;
+      let px = 0, pz = 0;
+      for (const [x, z] of hits) {
+        const r = world.nearestRoadPoint(x, z);
+        const dx = r.x - x, dz = r.z - z, d = Math.hypot(dx, dz) || 1;
+        px += dx / d; pz += dz / d;
+      }
+      const len = Math.hypot(px, pz) || 1;
+      px /= len; pz /= len;
+      const headOn = Math.abs(px * fx + pz * fz); // 1 = straight into it
+      this.rear.x += px * 0.12; this.rear.y += pz * 0.12;
+      this.updateCentre();
+      if (iter === 0) {
+        this.speed *= headOn > 0.7 ? -0.1 : 1 - 0.6 * headOn - 0.02;
+        if (headOn > 0.7) this.pitchVel += 0.4 * Math.sign(this.longAccel || 1); // jolt
+        this.scraping = 0.2;
+      }
+    }
+    if (this.collides(world)) {
+      this.rear.copy(prevRear);
+      this.heading = prevH;
+      this.updateCentre();
+      this.speed *= 0.5;
+    }
+  }
+
+  private blockedPoints(world: Collider): [number, number][] {
+    const out: [number, number][] = [];
+    this.forEachSample((x, z) => { if (world.isBlocked(x, z)) out.push([x, z]); });
+    return out;
+  }
+
   private collides(world: Collider): boolean {
+    let hit = false;
+    this.forEachSample((x, z) => { hit ||= world.isBlocked(x, z); });
+    return hit;
+  }
+
+  /** Points around the footprint used for collision. */
+  private forEachSample(fn: (x: number, z: number) => void): void {
     const { length, width } = BUS_DIMENSIONS;
     const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
     const rx = -fz, rz = fx;
     const hl = length / 2, hw = width / 2;
     for (const [a, b] of [[hl, hw], [hl, -hw], [-hl, hw], [-hl, -hw], [0, hw], [0, -hw], [hl, 0], [-hl, 0], [hl / 2, hw], [hl / 2, -hw], [-hl / 2, hw], [-hl / 2, -hw]]) {
-      if (world.isBlocked(this.position.x + fx * a + rx * b, this.position.z + fz * a + rz * b)) return true;
+      fn(this.position.x + fx * a + rx * b, this.position.z + fz * a + rz * b);
     }
-    return false;
   }
 
   private syncModel(dt: number): void {
