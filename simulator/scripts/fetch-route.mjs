@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Downloads Sydney bus route 445 from OpenStreetMap (Overpass API) and writes
- * src/data/route445.json in local metres. Run once; the game reads the JSON.
+ * Downloads Sydney bus route 445 from OpenStreetMap (Overpass API), plus the
+ * real buildings and side streets along it, and writes src/data/route445.json
+ * in local metres. Run once; the game reads the JSON.
  *
  *   node scripts/fetch-route.mjs                 # fetch live
  *   node scripts/fetch-route.mjs --input raw.json  # use a saved Overpass response
@@ -10,11 +11,14 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const QUERY = `[out:json][timeout:60];
+const QUERY = `[out:json][timeout:240][maxsize:268435456];
 rel["route"="bus"]["ref"="445"](-33.96,151.05,-33.84,151.21)->.r;
 .r out geom;
-way(r.r);out tags;
-node(r.r);out tags;`;
+way(r.r)->.rw;
+.rw out tags;
+node(r.r);out tags;
+way["building"](around.rw:90);out geom;
+way["highway"~"^(trunk|primary|secondary|tertiary|residential|unclassified|living_street|service)$"](around.rw:30);out geom;`;
 
 const args = process.argv.slice(2);
 let raw;
@@ -53,7 +57,7 @@ async function fetchOverpass() {
 }
 
 const rels = raw.elements.filter((e) => e.type === 'relation');
-const wayTags = new Map(raw.elements.filter((e) => e.type === 'way').map((w) => [w.id, w.tags ?? {}]));
+const wayTags = new Map(raw.elements.filter((e) => e.type === 'way' && !e.geometry).map((w) => [w.id, w.tags ?? {}]));
 // Prefer the direction towards Balmain; otherwise the first relation.
 const rel = rels.find((r) => /balmain/i.test(r.tags.to ?? r.tags.name ?? '')) ?? rels[0];
 if (!rel) throw new Error('Route 445 not found');
@@ -99,16 +103,66 @@ const stops = (stopMembers.length ? stopMembers : rel.members.filter((m) => m.ty
   .map((m) => ({ ref: m.ref, xz: proj(m.lat, m.lon) }));
 const nodeNames = new Map(raw.elements.filter((e) => e.type === 'node').map((n) => [n.id, n.tags?.name ?? '']));
 
+// --- Spatial index of the route, to keep only nearby buildings/streets
+const CELL = 50, grid = new Map();
+for (let i = 0; i < path.length - 1; i++) {
+  const [ax, az] = path[i], [bx, bz] = path[i + 1];
+  for (let cx = Math.floor((Math.min(ax, bx) - 120) / CELL); cx <= Math.floor((Math.max(ax, bx) + 120) / CELL); cx++)
+    for (let cz = Math.floor((Math.min(az, bz) - 120) / CELL); cz <= Math.floor((Math.max(az, bz) + 120) / CELL); cz++) {
+      const k = cx + ',' + cz; (grid.get(k) ?? grid.set(k, []).get(k)).push(i);
+    }
+}
+const routeDist = (x, z) => {
+  let best = Infinity;
+  for (const i of grid.get(Math.floor(x / CELL) + ',' + Math.floor(z / CELL)) ?? []) best = Math.min(best, segDist([x, z], path[i], path[i + 1]));
+  return best;
+};
+const r1 = (v) => Math.round(v * 10) / 10;
+
+// --- Buildings: [type, heightM, levels, x0, z0, x1, z1, ...] (open ring, metres)
+const TYPE = { house: 0, detached: 0, semidetached_house: 0, terrace: 0, residential: 0, bungalow: 0, yes: 0,
+  apartments: 1, flats: 1, commercial: 2, retail: 2, supermarket: 2, office: 2, hotel: 2,
+  church: 3, school: 3, public: 3, civic: 3, hospital: 3, university: 3, train_station: 3,
+  industrial: 4, warehouse: 4, garage: 5, garages: 5, shed: 5, carport: 5, roof: 5 };
+const buildings = [];
+for (const e of raw.elements) {
+  if (e.type !== 'way' || !e.tags?.building || !e.geometry || e.geometry.length < 4) continue;
+  const ring = e.geometry.slice(0, -1).map((g) => proj(g.lat, g.lon));
+  const cx = ring.reduce((a, p) => a + p[0], 0) / ring.length, cz = ring.reduce((a, p) => a + p[1], 0) / ring.length;
+  if (routeDist(cx, cz) > 90) continue;
+  let type = TYPE[e.tags.building] ?? 0;
+  if (type === 0 && (e.tags.shop || e.tags.amenity)) type = 2;
+  const h = parseFloat(e.tags.height) || 0, lv = parseInt(e.tags['building:levels']) || 0;
+  buildings.push([type, r1(h), lv, ...ring.flatMap(([x, z]) => [r1(x), r1(z)])]);
+}
+
+// --- Side streets (not the route itself), clipped to 120 m of the route: { w, n, p: [x0,z0,...] }
+const routeWayIds = new Set(rel.members.filter((m) => m.type === 'way').map((m) => m.ref));
+const SIDE_W = { trunk: 15, primary: 14, secondary: 13, tertiary: 12, residential: 9, unclassified: 9, living_street: 7, service: 5 };
+const streets = [];
+for (const e of raw.elements) {
+  if (e.type !== 'way' || !e.tags?.highway || !e.geometry || routeWayIds.has(e.id)) continue;
+  let run = [];
+  const flush = () => { if (run.length >= 4) streets.push({ w: SIDE_W[e.tags.highway] ?? 8, n: e.tags.name ?? '', p: run }); run = []; };
+  for (const g of e.geometry) {
+    const [x, z] = proj(g.lat, g.lon);
+    if (routeDist(x, z) <= 120) run.push(r1(x), r1(z)); else flush();
+  }
+  flush();
+}
+
 const out = {
   name: rel.tags.name, from: rel.tags.from, to: rel.tags.to,
   attribution: 'Map data © OpenStreetMap contributors (ODbL)',
   origin: { lat: +lat0.toFixed(6), lon: +lon0.toFixed(6) },
   path,                                            // [x, z, roadWidth]
   stops: stops.map((s) => ({ name: nodeNames.get(s.ref) || 'Bus stop', x: s.xz[0], z: s.xz[1] })),
+  buildings,
+  streets,
 };
 writeFileSync(new URL('../src/data/route445.json', import.meta.url), JSON.stringify(out));
 const len = path.slice(1).reduce((s, p, i) => s + Math.hypot(p[0] - path[i][0], p[1] - path[i][1]), 0);
-console.log(`Wrote ${path.length} points, ${(len / 1000).toFixed(1)} km, ${out.stops.length} stops`);
+console.log(`Wrote ${path.length} points, ${(len / 1000).toFixed(1)} km, ${out.stops.length} stops, ${buildings.length} buildings, ${streets.length} side streets`);
 
 function simplify(p, tol) {
   if (p.length < 3) return p;
