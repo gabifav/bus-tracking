@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sydney Bus Simulator</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #87b5e0; font-family: system-ui, sans-serif; }
+      canvas { display: block; }
+      #hud { position: fixed; right: 20px; bottom: 20px; color: #fff; text-align: right; pointer-events: none;
+             background: rgba(0,0,0,.55); padding: 10px 16px; border-radius: 10px; min-width: 130px; }
+      #speed { font-size: 48px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+      #unit { font-size: 14px; opacity: .8; }
+      #gear { font-size: 14px; margin-top: 4px; }
+      #help { position: fixed; left: 16px; top: 16px; color: #fff; background: rgba(0,0,0,.5);
+              padding: 8px 12px; border-radius: 8px; font-size: 13px; line-height: 1.5; pointer-events: none; }
+    </style>
+  </head>
+  <body>
+    <div id="help">
+      <b>Sydney Bus Simulator</b><br />
+      W / ↑ accelerate · S / ↓ brake &amp; reverse<br />
+      A D / ← → steer · Space handbrake · R reset · C camera
+    </div>
+    <div id="hud"><div id="speed">0</div><div id="unit">km/h</div><div id="gear">D</div></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
